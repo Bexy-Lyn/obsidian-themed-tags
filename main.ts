@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
+import { App, Plugin, PluginSettingTab, Setting, MarkdownView } from "obsidian";
 
 // Define interface for plugin settings
 interface ThemedTagsPluginSettings {
@@ -25,10 +25,18 @@ export default class ThemedTagsPlugin extends Plugin {
 				this.applyTagColors();
 			})
 		);
+
+		// Detect when a file is opened in the reading view
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", () => {
+				this.applyFileThemeColor();
+			})
+		);
 	}
 
 	onunload() {
 		this.removeTagColors();
+		this.removeFileThemeColor();
 	}
 
 	async loadSettings() {
@@ -61,6 +69,45 @@ export default class ThemedTagsPlugin extends Plugin {
 
 	removeTagColors() {
 		const style = document.getElementById("themed-tags-plugin-style");
+		if (style) {
+			style.remove();
+		}
+	}
+
+	applyFileThemeColor() {
+		const activeLeaf = this.app.workspace.activeLeaf;
+		if (activeLeaf && activeLeaf.view instanceof MarkdownView) {
+			const file = activeLeaf.view.file;
+			if (file) {
+				const fileCache = this.app.metadataCache.getFileCache(file);
+				if (fileCache?.tags && fileCache.tags.length > 0) {
+					const firstTag = fileCache.tags[0].tag.replace(/^#/, "");
+					const color = this.settings.tagColors[firstTag];
+					if (color) {
+						this.setFileThemeColor(color);
+					} else {
+						this.removeFileThemeColor();
+					}
+				} else {
+					this.removeFileThemeColor();
+				}
+			}
+		}
+	}
+
+	setFileThemeColor(color: string) {
+		const style = document.createElement("style");
+		style.id = "themed-tags-file-theme-color";
+		style.textContent = `
+			.markdown-preview-view {
+				--file-theme-color: ${color};
+			}
+		`;
+		document.head.appendChild(style);
+	}
+
+	removeFileThemeColor() {
+		const style = document.getElementById("themed-tags-file-theme-color");
 		if (style) {
 			style.remove();
 		}
