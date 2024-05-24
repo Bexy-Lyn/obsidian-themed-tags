@@ -1,8 +1,13 @@
-import { App, Plugin, PluginSettingTab } from "obsidian";
+import { App, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
-interface ThemedTagsPluginSettings {}
+// Define interface for plugin settings
+interface ThemedTagsPluginSettings {
+	tagColors: { [tag: string]: string };
+}
 
-const DEFAULT_SETTINGS: ThemedTagsPluginSettings = {};
+const DEFAULT_SETTINGS: ThemedTagsPluginSettings = {
+	tagColors: {},
+};
 
 export default class ThemedTagsPlugin extends Plugin {
 	settings: ThemedTagsPluginSettings;
@@ -10,10 +15,21 @@ export default class ThemedTagsPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.addSettingTab(new ThemedTagsPlugnSettings(this.app, this));
+		this.addSettingTab(new ThemedTagsPluginSettingTab(this.app, this));
+
+		// Apply the colors to the tags in the markdown preview
+		this.applyTagColors();
+
+		this.registerEvent(
+			this.app.metadataCache.on("changed", () => {
+				this.applyTagColors();
+			})
+		);
 	}
 
-	onunload() {}
+	onunload() {
+		this.removeTagColors();
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign(
@@ -26,9 +42,32 @@ export default class ThemedTagsPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+
+	applyTagColors() {
+		const style = document.createElement("style");
+		style.id = "themed-tags-plugin-style";
+		document.head.appendChild(style);
+
+		const { tagColors } = this.settings;
+		let css = "";
+
+		for (const tag in tagColors) {
+			const color = tagColors[tag];
+			css += `.tag[href="#${tag}"] { color: ${color} !important; }`;
+		}
+
+		style.textContent = css;
+	}
+
+	removeTagColors() {
+		const style = document.getElementById("themed-tags-plugin-style");
+		if (style) {
+			style.remove();
+		}
+	}
 }
 
-class ThemedTagsPlugnSettings extends PluginSettingTab {
+class ThemedTagsPluginSettingTab extends PluginSettingTab {
 	plugin: ThemedTagsPlugin;
 
 	constructor(app: App, plugin: ThemedTagsPlugin) {
@@ -36,5 +75,110 @@ class ThemedTagsPlugnSettings extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	display(): void {}
+	display(): void {
+		const { containerEl } = this;
+
+		containerEl.empty();
+		containerEl.createEl("h2", { text: "Themed Tags Plugin Settings" });
+
+		// Create a search bar
+		const searchBar = containerEl.createEl("input", {
+			type: "text",
+			placeholder: "Search tags...",
+		});
+		const tagListContainer = containerEl.createEl("div", {
+			cls: "tag-list-container",
+		});
+
+		// Retrieve all tags in the vault
+		const tags = this.getAllTags();
+
+		const accentColorHSL = getComputedStyle(document.body)
+			.getPropertyValue("--color-accent")
+			.trim();
+		const accentColorHex = this.hslToHex(accentColorHSL);
+
+		const renderTags = (filter: string) => {
+			tagListContainer.empty();
+
+			const filteredTags = tags.filter((tag) => tag.includes(filter));
+
+			filteredTags.forEach((tag) => {
+				const setting = new Setting(tagListContainer)
+					.setName(tag)
+					.addColorPicker((colorPicker) => {
+						colorPicker
+							.setValue(
+								this.plugin.settings.tagColors[tag] ||
+									accentColorHex
+							)
+							.onChange(async (value) => {
+								this.plugin.settings.tagColors[tag] = value;
+								await this.plugin.saveSettings();
+								this.plugin.applyTagColors();
+							});
+					});
+			});
+		};
+
+		renderTags("");
+
+		searchBar.addEventListener("input", () => {
+			const filter = searchBar.value.toLowerCase();
+			renderTags(filter);
+		});
+	}
+
+	getAllTags(): string[] {
+		const tags: Set<string> = new Set();
+		const files = this.app.vault.getMarkdownFiles();
+
+		files.forEach((file) => {
+			const fileCache = this.app.metadataCache.getFileCache(file);
+			if (fileCache?.tags) {
+				fileCache.tags.forEach((tag) =>
+					tags.add(tag.tag.replace(/^#/, ""))
+				);
+			}
+		});
+
+		return Array.from(tags);
+	}
+
+	hslToHex(hsl: string): string {
+		const hslMatch = hsl.match(/^hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)$/);
+		if (!hslMatch) {
+			return "#000000"; // fallback to black if parsing fails
+		}
+		let [_, h, s, l] = hslMatch.map(Number);
+		s /= 100;
+		l /= 100;
+
+		const a = s * Math.min(l, 1 - l);
+		const f = (n: number) => {
+			const k = (n + h / 30) % 12;
+			const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+			return Math.round(255 * color)
+				.toString(16)
+				.padStart(2, "0");
+		};
+
+		return `#${f(0)}${f(8)}${f(4)}`;
+	}
 }
+
+// Adding styles for the search bar and tag list container
+const style = document.createElement("style");
+style.textContent = `
+	.tag-list-container {
+		max-height: 400px;
+		overflow-y: auto;
+	}
+	input[type="text"] {
+		margin-bottom: 10px;
+		padding: 5px;
+		width: 100%;
+		box-sizing: border-box;
+	}
+`;
+document.head.appendChild(style);
