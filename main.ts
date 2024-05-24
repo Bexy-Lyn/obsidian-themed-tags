@@ -96,14 +96,62 @@ export default class ThemedTagsPlugin extends Plugin {
 	}
 
 	setFileThemeColor(color: string) {
+		const hslColor = this.hexToHsl(color);
 		const style = document.createElement("style");
 		style.id = "themed-tags-file-theme-color";
-		style.textContent = `
-			.markdown-preview-view {
-				--file-theme-color: ${color};
+		const accentVariables = this.getAccentVariables();
+		let css = ":root {";
+		accentVariables.forEach((variable) => {
+			const originalValue = this.getCssVariableValue(variable);
+			let newValue = originalValue;
+
+			if (!originalValue.includes("var(") && originalValue !== "") {
+				let skip = false;
+
+				if (variable.endsWith("-h") || variable.endsWith("-s")) {
+					// For 'h', 's', 'l' variables, we just replace the respective part
+					if (variable.endsWith("-h")) {
+						newValue = `${hslColor.h}`;
+					} else if (variable.endsWith("-s")) {
+						newValue = `${hslColor.s}%`;
+					}
+				} else if (variable.endsWith("-rgb")) {
+					// For 'rgb' variables, we need to convert HSL to RGB and apply the new hue and saturation
+					const { r, g, b } = this.parseRgbValue(originalValue);
+
+					const hslParts = this.rgbToHsl(r, g, b);
+					const rgbColor = this.hslToRgb(
+						hslColor.h,
+						hslColor.s,
+						hslParts.l
+					);
+					newValue = `rgb(${rgbColor.r}, ${rgbColor.g}, ${rgbColor.b})`;
+				} else if (originalValue.startsWith("hsl(")) {
+					// For 'hsl' variables, we replace the hue and saturation but keep the luminance
+					const hslParts = this.parseHslValue(originalValue);
+					newValue = `hsl(${hslColor.h}, ${hslColor.s}%, ${hslParts.l}%)`;
+				} else skip = true;
+
+				if (!skip) {
+					css += `--${variable}: ${newValue} !important;`;
+				}
 			}
-		`;
+		});
+		css += " }";
+		style.textContent = css;
 		document.head.appendChild(style);
+
+		// Directly modify body styles to override existing variables
+		document.body.style.setProperty(
+			"--accent-h",
+			`${hslColor.h}`,
+			"important"
+		);
+		document.body.style.setProperty(
+			"--accent-s",
+			`${hslColor.s}%`,
+			"important"
+		);
 	}
 
 	removeFileThemeColor() {
@@ -111,6 +159,172 @@ export default class ThemedTagsPlugin extends Plugin {
 		if (style) {
 			style.remove();
 		}
+
+		// Remove the body styles modifications
+		document.body.style.removeProperty("--accent-h");
+		document.body.style.removeProperty("--accent-s");
+	}
+
+	getAccentVariables(): string[] {
+		const styleSheets = Array.from(document.styleSheets);
+		const accentVariables: Set<string> = new Set();
+
+		for (const sheet of styleSheets) {
+			try {
+				const rules = Array.from((sheet as CSSStyleSheet).cssRules);
+				for (const rule of rules) {
+					if (rule instanceof CSSStyleRule) {
+						const style = rule.style;
+						for (let i = 0; i < style.length; i++) {
+							const name = style[i];
+							if (name.includes("accent")) {
+								accentVariables.add(name);
+							}
+						}
+					}
+				}
+			} catch (e) {
+				// Ignore rules we can't access (e.g., from external stylesheets)
+			}
+		}
+
+		return Array.from(accentVariables);
+	}
+
+	getCssVariableValue(variable: string): string {
+		return getComputedStyle(document.documentElement)
+			.getPropertyValue(`--${variable}`)
+			.trim();
+	}
+
+	parseHslValue(hsl: string): { h: number; s: number; l: number } {
+		const hslMatch = hsl.match(/^hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)$/);
+		if (!hslMatch) {
+			console.error(`Failed to parse HSL value: ${hsl}`); // Debugging statement
+			return { h: 0, s: 0, l: 50 }; // fallback with 50% luminance
+		}
+		let [_, h, s, l] = hslMatch.map(Number);
+		return { h, s, l };
+	}
+
+	parseRgbValue(rgb: string): { r: number; g: number; b: number } {
+		const rgbMatch = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+		if (!rgbMatch) {
+			console.error(`Failed to parse RGB value: ${rgb}`);
+			return { r: 0, g: 0, b: 0 }; // fallback to black if parsing fails
+		}
+		const [_, r, g, b] = rgbMatch.map(Number);
+		return { r, g, b };
+	}
+
+	hexToHsl(hex: string): { h: number; s: number; l: number } {
+		hex = hex.replace(/^#/, "");
+		let r = parseInt(hex.substring(0, 2), 16) / 255;
+		let g = parseInt(hex.substring(2, 4), 16) / 255;
+		let b = parseInt(hex.substring(4, 6), 16) / 255;
+
+		let max = Math.max(r, g, b);
+		let min = Math.min(r, g, b);
+		let h: number = 0,
+			s: number = 0,
+			l = (max + min) / 2;
+
+		if (max !== min) {
+			const d = max - min;
+			s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+			switch (max) {
+				case r:
+					h = (g - b) / d + (g < b ? 6 : 0);
+					break;
+				case g:
+					h = (b - r) / d + 2;
+					break;
+				case b:
+					h = (r - g) / d + 4;
+					break;
+			}
+			h /= 6;
+		}
+
+		return { h: h * 360, s: s * 100, l: l * 100 };
+	}
+
+	hslToRgb(
+		h: number,
+		s: number,
+		l: number
+	): { r: number; g: number; b: number } {
+		h /= 360;
+		s /= 100;
+		l /= 100;
+		let r: number, g: number, b: number;
+
+		if (s === 0) {
+			r = g = b = l; // achromatic
+		} else {
+			const hue2rgb = (p: number, q: number, t: number) => {
+				if (t < 0) t += 1;
+				if (t > 1) t -= 1;
+				if (t < 1 / 6) return p + (q - p) * 6 * t;
+				if (t < 1 / 3) return q;
+				if (t < 1 / 2) return p + (q - p) * (2 / 3 - t) * 6;
+				return p;
+			};
+
+			const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+			const p = 2 * l - q;
+			r = hue2rgb(p, q, h + 1 / 3);
+			g = hue2rgb(p, q, h);
+			b = hue2rgb(p, q, h - 1 / 3);
+		}
+
+		return {
+			r: Math.round(r * 255),
+			g: Math.round(g * 255),
+			b: Math.round(b * 255),
+		};
+	}
+
+	rgbToHsl(
+		r: number,
+		g: number,
+		b: number
+	): { h: number; s: number; l: number } {
+		// Convert r, g, b values from 0-255 to 0-1
+		r /= 255;
+		g /= 255;
+		b /= 255;
+
+		// Find the maximum and minimum values among r, g, b
+		const max = Math.max(r, g, b);
+		const min = Math.min(r, g, b);
+
+		let h = 0,
+			s = 0,
+			l = (max + min) / 2;
+
+		if (max !== min) {
+			const d = max - min;
+			s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+			switch (max) {
+				case r:
+					h = (g - b) / d + (g < b ? 6 : 0);
+					break;
+				case g:
+					h = (b - r) / d + 2;
+					break;
+				case b:
+					h = (r - g) / d + 4;
+					break;
+			}
+			h /= 6;
+		}
+
+		return {
+			h: h * 360,
+			s: s * 100,
+			l: l * 100,
+		};
 	}
 }
 
@@ -126,7 +340,7 @@ class ThemedTagsPluginSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 
 		containerEl.empty();
-		containerEl.createEl("h2", { text: "Themed Tags Plugin Settings" });
+		containerEl.createEl("h2", { text: "Themed Tags" });
 
 		// Create a search bar
 		const searchBar = containerEl.createEl("input", {
@@ -151,7 +365,7 @@ class ThemedTagsPluginSettingTab extends PluginSettingTab {
 			const filteredTags = tags.filter((tag) => tag.includes(filter));
 
 			filteredTags.forEach((tag) => {
-				const setting = new Setting(tagListContainer)
+				new Setting(tagListContainer)
 					.setName(tag)
 					.addColorPicker((colorPicker) => {
 						colorPicker
