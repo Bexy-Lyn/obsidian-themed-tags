@@ -1,0 +1,9 @@
+{
+	"id": "themed-tags",
+	"name": "Themed Tags",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Choose a color for tags to colourcode your notes.",
+	"author": "Bexy_Lyn",
+	"isDesktopOnly": false
+}
